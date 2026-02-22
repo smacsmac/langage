@@ -1,12 +1,5 @@
 /* PhonoCoach FR – MVP (front-end only)
-   - PWA + offline cache
-   - Sons -> pages dédiées (Pratique / Lecture / Exercices)
-   - Tableau de bord (scores % par son) + clic -> page du son
-   - Test rapide (lecture) -> suggestions (si provider de scoring configuré)
-   - Paramètres: clés (OpenRouter, Azure, Speechace) + Proxy URL recommandé
-
-   IMPORTANT: Pour Azure Pronunciation Assessment / Speechace, utilise un proxy backend
-   (Azure Function, Cloudflare Worker, etc.) pour protéger tes clés.
+   Fix important: IDs IPA encodés/décodés dans le hash router.
 */
 
 const $ = (sel, el=document) => el.querySelector(sel);
@@ -19,7 +12,7 @@ const SOUND_CATEGORIES = [
   { id:"nasales", label:"Voyelles nasales", hint:"/ɑ̃ ɛ̃ ɔ̃ œ̃/", emoji:"🌫️" },
   { id:"midvowels", label:"Voyelles moyennes", hint:"/e~ɛ, ø~œ, o~ɔ/", emoji:"🎯" },
   { id:"endings", label:"Terminaisons", hint:"-ent, -eux/-eur", emoji:"🧩" },
-  { id:"liaison", label:"Liaison & enchaînement", hint:"module (bientôt)", emoji:"🔗", disabled:true },
+  { id:"liaison", label:"Liaison", hint:"bientôt", emoji:"🔗", disabled:true },
 ];
 
 const SOUNDS = [
@@ -37,7 +30,6 @@ const SOUNDS = [
       {a:"sans", b:"son", note:"/ɑ̃/ vs /ɔ̃/"},
       {a:"lent", b:"lait", note:"nasal vs oral (approx)"},
     ],
-    tags:["nasal","vowel"]
   },
   {
     id:"on-ɔ̃",
@@ -53,7 +45,6 @@ const SOUNDS = [
       {a:"son", b:"sans", note:"/ɔ̃/ vs /ɑ̃/"},
       {a:"bon", b:"beau", note:"nasal vs /o/"},
     ],
-    tags:["nasal","vowel"]
   },
   {
     id:"in-ɛ̃",
@@ -69,14 +60,13 @@ const SOUNDS = [
       {a:"vin", b:"vent", note:"/ɛ̃/ vs /ɑ̃/"},
       {a:"pain", b:"pont", note:"/ɛ̃/ vs /ɔ̃/"},
     ],
-    tags:["nasal","vowel"]
   },
   {
     id:"eu-øœ",
     cat:"midvowels",
     title:"EU / ŒU (peu vs peur)",
     ipa:"/ø/ ~ /œ/",
-    articulatory:"Lèvres arrondies, langue moyenne. Souvent /ø/ en syllabe fermée? (selon mot). Objectif: distinguer “peu” et “peur”.",
+    articulatory:"Lèvres arrondies, langue moyenne. Objectif: distinguer “peu” et “peur”.",
     spellings:["eu","œu","eû"],
     examples:["peu","peur","deux","heure"],
     practicePrompts:["peu","peur","deux","heure","heureusement"],
@@ -85,14 +75,13 @@ const SOUNDS = [
       {a:"peu", b:"peur", note:"/ø/ vs /œ/"},
       {a:"deux", b:"d’heure", note:"approx /ø/ vs /œ/"},
     ],
-    tags:["vowel","contrast"]
   },
   {
     id:"ent-muet",
     cat:"endings",
     title:"-ENT (verbes -er)",
     ipa:"(muet)",
-    articulatory:"Dans beaucoup de verbes en -er au présent (ils parlent), “-ent” ne se prononce pas. Attention aux cas où la consonne du radical se fait entendre (selon le verbe).",
+    articulatory:"Dans beaucoup de verbes en -er au présent (ils parlent), “-ent” ne se prononce pas.",
     spellings:["-ent"],
     examples:["ils parlent","elles regardent","ils chantent"],
     practicePrompts:["ils parlent","elles regardent","ils chantent","elles aiment"],
@@ -101,7 +90,6 @@ const SOUNDS = [
       {a:"il parle", b:"ils parlent", note:"souvent identique à l’oral"},
       {a:"il chante", b:"ils chantent", note:"souvent identique à l’oral"},
     ],
-    tags:["ending","silent"]
   },
   {
     id:"eux-eur",
@@ -117,17 +105,16 @@ const SOUNDS = [
       {a:"heureux", b:"heure", note:"famille EU"},
       {a:"chanteur", b:"chanteuse", note:"variation en contexte"},
     ],
-    tags:["ending","vowel"]
   },
 ];
 
 const DEFAULTS = {
-  theme: "dark", // dark par défaut
+  theme: "dark",
   ttsVoice: "auto",
   provider: "none", // none | proxy
-  proxyUrl: "",    // recommandé
+  proxyUrl: "",
   openrouterKey: "",
-  openrouterModel: "openai/gpt-4o-mini", // exemple; modifie si tu veux
+  openrouterModel: "openai/gpt-4o-mini",
   azureKey: "",
   azureRegion: "",
   speechaceKey: "",
@@ -136,8 +123,11 @@ const DEFAULTS = {
 const STORE_KEYS = {
   settings: "phonocoach_settings_v1",
   scores: "phonocoach_scores_v1",
-  history: "phonocoach_history_v1",
 };
+
+function safeJson(str, fallback){
+  try { return JSON.parse(str); } catch { return fallback; }
+}
 
 function loadSettings(){
   const raw = localStorage.getItem(STORE_KEYS.settings);
@@ -150,9 +140,7 @@ function saveSettings(s){
 
 function loadScores(){
   const raw = localStorage.getItem(STORE_KEYS.scores);
-  const obj = raw ? safeJson(raw, {}) : {};
-  // structure: { [soundId]: { best: number, last: number, attempts: number, updatedAt: ts } }
-  return obj;
+  return raw ? safeJson(raw, {}) : {};
 }
 function saveScores(scores){
   localStorage.setItem(STORE_KEYS.scores, JSON.stringify(scores));
@@ -180,7 +168,7 @@ if ("serviceWorker" in navigator) {
 }
 
 /* -----------------------------
-   Routing (hash)
+   Routing (hash) — FIX IPA IDs
 ------------------------------ */
 const view = $("#view");
 const subtitle = $("#subtitle");
@@ -204,16 +192,10 @@ function currentHash(){
   return location.hash || "#/";
 }
 
+// IMPORTANT: decodeURIComponent sur chaque segment
 function parseRoute(hash){
-  // routes:
-  // #/  home
-  // #/dashboard
-  // #/test
-  // #/settings
-  // #/category/:id
-  // #/sound/:id
   const h = hash.replace(/^#/, "");
-  const parts = h.split("/").filter(Boolean);
+  const parts = h.split("/").filter(Boolean).map(p => decodeURIComponent(p));
   const [a,b,c] = parts;
   return { a: a||"", b: b||"", c: c||"" };
 }
@@ -253,7 +235,7 @@ $$(".navbtn").forEach(btn=>{
 })();
 
 /* -----------------------------
-   Audio utils (MediaRecorder)
+   Audio (MediaRecorder)
 ------------------------------ */
 async function getMicStream(){
   return navigator.mediaDevices.getUserMedia({ audio: true });
@@ -270,38 +252,6 @@ function pickBestMimeType(){
   return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 }
 
-async function recordAudio({maxMs=12000}={}){
-  const stream = await getMicStream();
-  const mimeType = pickBestMimeType();
-  const rec = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
-  const chunks = [];
-  return await new Promise((resolve, reject)=>{
-    let stopped = false;
-    const stopAll = () => {
-      stream.getTracks().forEach(t=>t.stop());
-    };
-    const timer = setTimeout(()=>{
-      if (!stopped) rec.stop();
-    }, maxMs);
-
-    rec.ondataavailable = (e)=> { if (e.data && e.data.size) chunks.push(e.data); };
-    rec.onerror = (e)=> { clearTimeout(timer); stopAll(); reject(e.error || e); };
-    rec.onstop = ()=>{
-      stopped = true;
-      clearTimeout(timer);
-      stopAll();
-      const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-      resolve({ blob, mimeType: rec.mimeType || blob.type || "audio/webm" });
-    };
-    rec.start();
-    resolve({
-      stop: ()=> { if (!stopped) rec.stop(); },
-      wait: ()=> new Promise(res=> { rec.onstop = ()=>{ stopped=true; clearTimeout(timer); stopAll(); const blob=new Blob(chunks,{type:rec.mimeType||"audio/webm"}); res({blob,mimeType:rec.mimeType||"audio/webm"}); }; })
-    });
-  });
-}
-
-// Alternative record flow (UI-friendly)
 async function startRecorder(maxMs=12000){
   const stream = await getMicStream();
   const mimeType = pickBestMimeType();
@@ -310,9 +260,7 @@ async function startRecorder(maxMs=12000){
   let stopped = false;
 
   const stopAll = () => stream.getTracks().forEach(t=>t.stop());
-
   rec.ondataavailable = (e)=> { if (e.data && e.data.size) chunks.push(e.data); };
-
   rec.start();
 
   const timer = setTimeout(()=>{ if(!stopped) rec.stop(); }, maxMs);
@@ -356,7 +304,6 @@ function speakText(text){
     const v = frVoices.find(v=> v.voiceURI === s.ttsVoice) || frVoices.find(v=> v.name === s.ttsVoice);
     if (v) u.voice = v;
   } else {
-    // tente fr-CA puis fr-FR
     u.voice = frVoices.find(v=> /fr-CA/i.test(v.lang)) || frVoices.find(v=> /fr-FR/i.test(v.lang)) || frVoices[0] || null;
   }
   u.rate = 1.0;
@@ -366,30 +313,19 @@ function speakText(text){
 }
 
 /* -----------------------------
-   Providers (scoring)
-   - "none": aucun scoring, mais OpenRouter peut donner des conseils généraux
-   - "proxy": POST vers settings.proxyUrl (recommandé)
+   Providers (placeholder)
 ------------------------------ */
 async function scoreWithProvider({ audioBlob, referenceText, mode, soundId }){
   const s = loadSettings();
 
   if (s.provider === "none"){
-    return {
-      ok: true,
-      provider: "none",
-      overallScore: null,
-      details: null,
-      note: "Aucun provider de scoring configuré. Utilise la réécoute + conseils."
-    };
+    return { ok:true, provider:"none", overallScore:null, details:null, note:"Scoring désactivé." };
   }
 
   if (s.provider === "proxy"){
     if (!s.proxyUrl){
       return { ok:false, error:"Proxy URL manquante (Paramètres → Proxy URL)." };
     }
-    // Le proxy doit accepter multipart/form-data:
-    // fields: providerHint (azure|speechace), mode (practice|reading|test), referenceText, soundId
-    // file: audio
     const fd = new FormData();
     fd.append("mode", mode || "practice");
     fd.append("referenceText", referenceText || "");
@@ -397,17 +333,12 @@ async function scoreWithProvider({ audioBlob, referenceText, mode, soundId }){
     fd.append("providerHint", inferProviderHint(s));
     fd.append("audio", audioBlob, "audio.webm");
 
-    // optionnel: si tu veux aussi forward keys côté proxy (pas recommandé côté client)
-    // on les envoie seulement si tu le veux
+    // (optionnel) si tu veux forward key côté proxy (pas recommandé)
     if (s.azureKey) fd.append("azureKey", s.azureKey);
     if (s.azureRegion) fd.append("azureRegion", s.azureRegion);
     if (s.speechaceKey) fd.append("speechaceKey", s.speechaceKey);
 
-    const resp = await fetch(s.proxyUrl.replace(/\/$/,"") + "/score", {
-      method:"POST",
-      body: fd,
-    });
-
+    const resp = await fetch(s.proxyUrl.replace(/\/$/,"") + "/score", { method:"POST", body: fd });
     if (!resp.ok){
       const t = await resp.text().catch(()=> "");
       return { ok:false, error:`Proxy error: ${resp.status} ${t.slice(0,180)}` };
@@ -415,22 +346,26 @@ async function scoreWithProvider({ audioBlob, referenceText, mode, soundId }){
     const data = await resp.json().catch(()=>null);
     if (!data) return { ok:false, error:"Réponse proxy invalide (JSON)." };
 
-    // attendus (libres): { overallScore:number(0-100), details:any, provider:string }
-    return { ok:true, provider: data.provider || "proxy", overallScore: data.overallScore ?? null, details: data.details ?? null, raw: data };
+    return {
+      ok:true,
+      provider: data.provider || "proxy",
+      overallScore: data.overallScore ?? null,
+      details: data.details ?? null,
+      raw: data
+    };
   }
 
   return { ok:false, error:"Provider inconnu." };
 }
 
 function inferProviderHint(s){
-  // simple préférence: Azure si région+clé, sinon Speechace si clé, sinon "auto"
   if (s.azureKey && s.azureRegion) return "azure";
   if (s.speechaceKey) return "speechace";
   return "auto";
 }
 
 /* -----------------------------
-   OpenRouter (feedback + génération)
+   OpenRouter (feedback + texte)
 ------------------------------ */
 async function callOpenRouter(messages, {temperature=0.3}={}){
   const s = loadSettings();
@@ -441,7 +376,6 @@ async function callOpenRouter(messages, {temperature=0.3}={}){
     headers:{
       "Content-Type":"application/json",
       "Authorization": `Bearer ${s.openrouterKey}`,
-      // OpenRouter recommande des headers optionnels (référer/nom), mais pas obligatoires
     },
     body: JSON.stringify({
       model: s.openrouterModel || DEFAULTS.openrouterModel,
@@ -461,28 +395,29 @@ async function callOpenRouter(messages, {temperature=0.3}={}){
 
 async function generateCoachFeedback({sound, referenceText, scoreResult, userNote=""}){
   const s = loadSettings();
-  if (!s.openrouterKey) return { ok:true, text:"(OpenRouter non configuré) Conseil rapide: enregistre-toi, réécoute, puis compare avec le TTS. Recommence 3 fois en exagérant légèrement l’articulation." };
+  if (!s.openrouterKey){
+    return { ok:true, text:"Astuce: enregistre-toi, réécoute, puis compare avec le TTS. Recommence 3 fois en exagérant légèrement l’articulation." };
+  }
 
-  const sys = `Tu es un coach de prononciation du français (pédagogie très concrète). Donne des conseils actionnables, courts, et adaptés à un anglophone apprenant le français.`;
+  const sys = `Tu es un coach de prononciation du français. Conseils courts, concrets, actionnables.`;
   const user = {
     role:"user",
     content:
 `Son cible: ${sound.title} (${sound.ipa})
-Description articulatoire: ${sound.articulatory}
-Texte de référence: ${referenceText || "(aucun)"}
-Résultat scoring (peut être nul): ${JSON.stringify({
+Description: ${sound.articulatory}
+Référence: ${referenceText || "(aucun)"}
+Scoring: ${JSON.stringify({
   overallScore: scoreResult?.overallScore ?? null,
   details: scoreResult?.details ?? null,
   provider: scoreResult?.provider ?? null
 }).slice(0,1600)}
+Note: ${userNote || "(aucune)"}
 
-Note utilisateur (optionnel): ${userNote || "(aucune)"}
-
-Tâche:
-1) Donne 3 observations max (bullet points).
-2) Donne 3 corrections physiques (langue/lèvres/air/rythme).
-3) Propose 3 mini-exercices immédiats (10–20 sec chacun) liés à ce son.
-N'invente pas des chiffres: si pas de détails, reste général mais utile.`
+Donne:
+- 3 observations max
+- 3 corrections physiques (langue/lèvres/air/rythme)
+- 3 mini-exercices (10–20 sec)
+Pas de blabla.`
   };
 
   return await callOpenRouter([{role:"system", content:sys}, user], {temperature:0.2});
@@ -498,35 +433,37 @@ async function generateTargetedReading(sound){
     role:"user",
     content:
 `Écris un texte de 2–3 phrases max qui contient beaucoup d'occurrences de ce son:
-- Son/graphies: ${sound.title} (${sound.ipa}) | graphies: ${(sound.spellings||[]).join(", ")}
-- Vocabulaire facile (A2–B1).
-- Pas de noms propres.
-- Évite la ponctuation trop complexe.
-Retourne uniquement le texte.`
+Son/graphies: ${sound.title} (${sound.ipa}) | graphies: ${(sound.spellings||[]).join(", ")}
+Vocabulaire facile. Retourne uniquement le texte.`
   };
   const r = await callOpenRouter([{role:"system", content:sys}, user], {temperature:0.5});
   return r.ok ? r : { ok:true, text: sound.readingText };
 }
 
 /* -----------------------------
-   Rendering
+   Helpers
 ------------------------------ */
-function safeJson(str, fallback){
-  try { return JSON.parse(str); } catch { return fallback; }
-}
-
 function scoreToPct(score){
   if (score === null || score === undefined) return null;
   const n = Number(score);
   if (!Number.isFinite(n)) return null;
   return Math.max(0, Math.min(100, Math.round(n)));
 }
+function escapeHtml(s){
+  return String(s ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;");
+}
 
+/* -----------------------------
+   Rendering
+------------------------------ */
 function render(){
   setActiveNav();
   const r = parseRoute(currentHash());
 
-  // back button enable/disable
   btnBack.style.visibility = (currentHash() === "#/" || currentHash() === "") ? "hidden" : "visible";
 
   if (r.a === "" ){ renderHome(); return; }
@@ -536,7 +473,6 @@ function render(){
   if (r.a === "category" && r.b){ renderCategory(r.b); return; }
   if (r.a === "sound" && r.b){ renderSound(r.b); return; }
 
-  // fallback
   renderHome();
 }
 
@@ -548,34 +484,42 @@ function renderHome(){
     <div class="row">
       <div class="col">
         <div class="card">
-          <div class="h1">Choisis une catégorie</div>
-          <p class="p">Tu commences par un son, puis tu passes en <span class="badge"><strong>Pratique</strong></span> ou <span class="badge"><strong>Lecture</strong></span> (spécifique au son).</p>
+          <div class="h1">Catégories</div>
           <div class="grid" id="catGrid"></div>
+
+          <div class="hr"></div>
+          <div class="btnrow">
+            <button class="btn primary" id="goDashboard">Mes scores</button>
+            <button class="btn" id="goTest">Test rapide</button>
+            <button class="btn" id="goSettings">Paramètres</button>
+          </div>
+
           <div class="hr"></div>
           <div class="row">
-            <div class="col">
-              <div class="badge">Mode sombre: <strong>${settings.theme === "dark" ? "ON" : "OFF"}</strong></div>
-            </div>
-            <div class="col">
-              <div class="badge">Scoring: <strong>${settings.provider}</strong></div>
-            </div>
+            <div class="col"><div class="badge">Thème <strong>${settings.theme === "dark" ? "Sombre" : "Clair"}</strong></div></div>
+            <div class="col"><div class="badge">Scoring <strong>${settings.provider}</strong></div></div>
           </div>
         </div>
       </div>
 
       <div class="col">
         <div class="card">
-          <div class="h2">Démarrage rapide</div>
-          <p class="p">• Va à <strong>Scores</strong> pour voir ton % par son et cliquer pour pratiquer.<br>• Ou fais un <strong>Test rapide</strong> (lecture) pour recevoir des suggestions.</p>
-          <div class="btnrow">
-            <button class="btn primary" id="goDashboard">Voir mes scores</button>
-            <button class="btn" id="goTest">Test rapide</button>
-            <button class="btn" id="goSettings">Paramètres</button>
+          <div class="h1">Commencer</div>
+          <p class="p">Choisis une catégorie → un son → <strong>Pratique</strong> ou <strong>Lecture</strong>.</p>
+          <div class="grid">
+            <div class="item" id="quick1">
+              <div class="label">🎧 Écoute</div>
+              <div class="meta">TTS navigateur</div>
+            </div>
+            <div class="item" id="quick2">
+              <div class="label">🎙️ Enregistre</div>
+              <div class="meta">Réécoute instant</div>
+            </div>
+            <div class="item" id="quick3">
+              <div class="label">📈 Score</div>
+              <div class="meta">Proxy (optionnel)</div>
+            </div>
           </div>
-          <div class="hr"></div>
-          <p class="small">
-            Astuce: même sans IA, l’app est utile pour <strong>enregistrer</strong> et <strong>réécouter</strong>. Avec un provider (proxy), tu obtiens des scores.
-          </p>
         </div>
       </div>
     </div>
@@ -592,10 +536,10 @@ function renderHome(){
     `;
     el.addEventListener("click", ()=>{
       if (cat.disabled){
-        showToast("Module bientôt 🙂");
+        showToast("Bientôt 🙂");
         return;
       }
-      navigate(`#/category/${cat.id}`);
+      navigate(`#/category/${encodeURIComponent(cat.id)}`);
     });
     grid.appendChild(el);
   });
@@ -603,6 +547,10 @@ function renderHome(){
   $("#goDashboard").onclick = ()=> navigate("#/dashboard");
   $("#goTest").onclick = ()=> navigate("#/test");
   $("#goSettings").onclick = ()=> navigate("#/settings");
+
+  $("#quick1").onclick = ()=> showToast("Astuce: écoute puis imite ✨");
+  $("#quick2").onclick = ()=> showToast("Astuce: enregistre 3 fois 🔁");
+  $("#quick3").onclick = ()=> showToast("Astuce: proxy = scores 🔐");
 }
 
 function renderCategory(catId){
@@ -613,7 +561,6 @@ function renderCategory(catId){
   view.innerHTML = `
     <div class="card">
       <div class="h1">${cat?.emoji || "🔎"} ${cat?.label || "Catégorie"}</div>
-      <p class="p">${cat?.hint || ""}</p>
       <div class="grid" id="soundGrid"></div>
     </div>
   `;
@@ -623,9 +570,9 @@ function renderCategory(catId){
     el.className = "item";
     el.innerHTML = `
       <div class="label">${sound.title}</div>
-      <div class="meta">${sound.ipa} • ex: ${(sound.examples||[]).slice(0,2).join(", ")}</div>
+      <div class="meta">${sound.ipa} • ${(sound.examples||[]).slice(0,2).join(", ")}</div>
     `;
-    el.onclick = ()=> navigate(`#/sound/${sound.id}`);
+    el.onclick = ()=> navigate(`#/sound/${encodeURIComponent(sound.id)}`);
     grid.appendChild(el);
   });
 }
@@ -645,7 +592,6 @@ function renderDashboard(){
   view.innerHTML = `
     <div class="card">
       <div class="h1">Mes scores</div>
-      <p class="p">Clique un son pour aller directement à sa page de pratique.</p>
 
       <table class="table">
         <thead>
@@ -654,7 +600,7 @@ function renderDashboard(){
             <th>IPA</th>
             <th>Meilleur</th>
             <th>Dernier</th>
-            <th>Tentatives</th>
+            <th>#</th>
           </tr>
         </thead>
         <tbody id="scoreBody"></tbody>
@@ -662,9 +608,9 @@ function renderDashboard(){
 
       <div class="hr"></div>
       <div class="btnrow">
-        <button class="btn danger" id="resetScores">Réinitialiser les scores</button>
+        <button class="btn danger" id="resetScores">Réinitialiser</button>
       </div>
-      <p class="small">Les scores sont stockés localement (localStorage).</p>
+      <p class="small">Stocké localement (localStorage).</p>
     </div>
   `;
 
@@ -672,8 +618,8 @@ function renderDashboard(){
   rows.forEach(r=>{
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><span class="clicklink" data-sid="${r.sound.id}">${r.sound.title}</span></td>
-      <td>${r.sound.ipa}</td>
+      <td><span class="clicklink" data-sid="${escapeHtml(r.sound.id)}">${escapeHtml(r.sound.title)}</span></td>
+      <td>${escapeHtml(r.sound.ipa)}</td>
       <td><strong>${Math.round(r.best)}%</strong></td>
       <td>${r.last===null ? "—" : `${Math.round(r.last)}%`}</td>
       <td>${r.attempts}</td>
@@ -682,13 +628,13 @@ function renderDashboard(){
   });
 
   $$(".clicklink").forEach(el=>{
-    el.onclick = ()=> navigate(`#/sound/${el.getAttribute("data-sid")}`);
+    el.onclick = ()=> navigate(`#/sound/${encodeURIComponent(el.getAttribute("data-sid"))}`);
   });
 
   $("#resetScores").onclick = ()=>{
     if (!confirm("Réinitialiser tous les scores ?")) return;
     localStorage.removeItem(STORE_KEYS.scores);
-    showToast("Scores réinitialisés");
+    showToast("OK");
     renderDashboard();
   };
 }
@@ -708,26 +654,23 @@ function renderSound(soundId){
     <div class="row">
       <div class="col">
         <div class="card">
-          <div class="h1">${sound.title} <span class="badge"><strong>${sound.ipa}</strong></span></div>
-          <p class="p">${sound.articulatory}</p>
+          <div class="h1">${escapeHtml(sound.title)} <span class="badge"><strong>${escapeHtml(sound.ipa)}</strong></span></div>
 
           <div class="row">
             <div class="col">
               <div class="badge">Meilleur <strong>${best}%</strong></div>
               <div class="badge">Dernier <strong>${last===null?"—":last+"%"}</strong></div>
-              <div class="badge">Tentatives <strong>${attempts}</strong></div>
+              <div class="badge">Essais <strong>${attempts}</strong></div>
             </div>
             <div class="col">
               <div class="scorebar"><div style="width:${best}%"></div></div>
-              <div class="small" style="margin-top:6px;">
-                Graphies: <span class="kbd">${(sound.spellings||[]).join(" • ")}</span>
+              <div class="small" style="margin-top:8px;">
+                Graphies: <span class="kbd">${(sound.spellings||[]).map(escapeHtml).join(" • ")}</span>
               </div>
             </div>
           </div>
 
           <div class="hr"></div>
-          <div class="h2">Exemples</div>
-          <p class="p">${(sound.examples||[]).join(" • ")}</p>
 
           <div class="btnrow">
             <button class="btn primary" id="tabPractice">Pratique</button>
@@ -746,16 +689,13 @@ function renderSound(soundId){
   $("#tabPractice").onclick = ()=> renderModePractice(sound);
   $("#tabReading").onclick = ()=> renderModeReading(sound);
   $("#tabExtras").onclick = ()=> renderModeExtras(sound);
-
-  // default: pratique
   renderModePractice(sound);
 }
 
 function renderModePractice(sound){
   const modeCard = $("#modeCard");
   modeCard.innerHTML = `
-    <div class="h2">Mode: Pratique (mots / syllabes)</div>
-    <p class="p">Choisis un prompt, écoute si tu veux, enregistre-toi, puis demande un score (si configuré) + feedback.</p>
+    <div class="h2">Pratique</div>
 
     <div class="field">
       <label>Prompt</label>
@@ -763,7 +703,7 @@ function renderModePractice(sound){
     </div>
 
     <div class="btnrow">
-      <button class="btn" id="btnSpeak">Écouter (TTS)</button>
+      <button class="btn" id="btnSpeak">Écouter</button>
       <button class="btn primary" id="btnRec">🎙️ Enregistrer</button>
       <button class="btn" id="btnStop" disabled>Stop</button>
     </div>
@@ -773,7 +713,7 @@ function renderModePractice(sound){
     <div class="hr"></div>
 
     <div class="btnrow">
-      <button class="btn primary" id="btnScore" disabled>Analyser / Score</button>
+      <button class="btn primary" id="btnScore" disabled>Score</button>
       <button class="btn" id="btnCoach" disabled>Feedback IA</button>
     </div>
 
@@ -801,7 +741,7 @@ function renderModePractice(sound){
       $("#btnRec").disabled = true;
       $("#btnStop").disabled = false;
       showToast("Enregistrement…");
-    }catch(e){
+    }catch{
       alert("Micro refusé ou indisponible.");
     }
   };
@@ -822,16 +762,16 @@ function renderModePractice(sound){
     $("#btnRec").disabled = false;
     $("#btnScore").disabled = false;
     $("#btnCoach").disabled = true;
-    $("#result").textContent = "Audio prêt. Lance “Analyser / Score”.";
+    $("#result").textContent = "Audio prêt.";
   };
 
   $("#btnScore").onclick = async ()=>{
     if (!lastBlob) return;
-    $("#result").textContent = "Analyse en cours…";
+    $("#result").textContent = "Analyse…";
     $("#coach").textContent = "";
     lastScoreResult = null;
 
-    const referenceText = sel.value; // en pratique, c’est ok (mot/phrase)
+    const referenceText = sel.value;
     const res = await scoreWithProvider({
       audioBlob: lastBlob,
       referenceText,
@@ -841,30 +781,26 @@ function renderModePractice(sound){
 
     if (!res.ok){
       $("#result").innerHTML = `<span class="warn">Erreur:</span> ${escapeHtml(res.error || "inconnue")}`;
-      $("#btnCoach").disabled = false; // IA peut quand même donner conseils généraux
+      $("#btnCoach").disabled = false;
       lastScoreResult = { overallScore:null, details:null, provider:"none" };
       return;
     }
 
     const pct = scoreToPct(res.overallScore);
-    if (pct !== null){
-      updateScore(sound.id, pct);
-    }
+    if (pct !== null) updateScore(sound.id, pct);
 
     $("#result").innerHTML = `
       <div class="badge">Provider <strong>${escapeHtml(res.provider)}</strong></div>
       <div class="badge">Score <strong>${pct===null ? "—" : pct+"%"}</strong></div>
-      <div class="small" style="margin-top:8px;">${res.note ? escapeHtml(res.note) : "Détails: voir ci-dessous si disponibles."}</div>
       <details style="margin-top:10px;">
-        <summary class="small">Voir la réponse brute</summary>
+        <summary class="small">Brut</summary>
         <pre style="overflow:auto; font-family:var(--mono); font-size:12px; white-space:pre-wrap;">${escapeHtml(JSON.stringify(res.raw || res, null, 2))}</pre>
       </details>
     `;
     $("#btnCoach").disabled = false;
     lastScoreResult = res;
 
-    showToast(pct===null ? "Analyse terminée" : `Score: ${pct}%`);
-    // rafraîchit la jauge “best” sans changer de page
+    showToast(pct===null ? "OK" : `Score ${pct}%`);
     setTimeout(()=> renderSound(sound.id), 400);
   };
 
@@ -883,8 +819,7 @@ function renderModePractice(sound){
 function renderModeReading(sound){
   const modeCard = $("#modeCard");
   modeCard.innerHTML = `
-    <div class="h2">Mode: Lecture (texte riche en occurrences)</div>
-    <p class="p">Écoute le texte, lis-le à voix haute, puis analyse. Tu peux aussi demander un nouveau texte généré.</p>
+    <div class="h2">Lecture</div>
 
     <div class="field">
       <label>Texte</label>
@@ -892,14 +827,14 @@ function renderModeReading(sound){
     </div>
 
     <div class="btnrow">
-      <button class="btn" id="btnSpeakRead">Écouter (TTS)</button>
-      <button class="btn" id="btnGenText">✨ Générer un texte</button>
+      <button class="btn" id="btnSpeakRead">Écouter</button>
+      <button class="btn" id="btnGenText">✨ Nouveau texte</button>
     </div>
 
     <div class="hr"></div>
 
     <div class="btnrow">
-      <button class="btn primary" id="btnRecR">🎙️ Enregistrer ma lecture</button>
+      <button class="btn primary" id="btnRecR">🎙️ Enregistrer</button>
       <button class="btn" id="btnStopR" disabled>Stop</button>
     </div>
 
@@ -908,7 +843,7 @@ function renderModeReading(sound){
     <div class="hr"></div>
 
     <div class="btnrow">
-      <button class="btn primary" id="btnScoreR" disabled>Analyser / Score</button>
+      <button class="btn primary" id="btnScoreR" disabled>Score</button>
       <button class="btn" id="btnCoachR" disabled>Feedback IA</button>
     </div>
 
@@ -925,7 +860,7 @@ function renderModeReading(sound){
     $("#resultR").textContent = "Génération…";
     const r = await generateTargetedReading(sound);
     ta.value = r.text || ta.value;
-    $("#resultR").textContent = r.ok ? "Texte prêt." : `Erreur: ${r.error}`;
+    $("#resultR").textContent = r.ok ? "OK" : `Erreur: ${r.error}`;
   };
 
   let recorder = null;
@@ -959,19 +894,18 @@ function renderModeReading(sound){
     $("#btnRecR").disabled = false;
     $("#btnScoreR").disabled = false;
     $("#btnCoachR").disabled = true;
-    $("#resultR").textContent = "Audio prêt. Lance “Analyser / Score”.";
+    $("#resultR").textContent = "Audio prêt.";
   };
 
   $("#btnScoreR").onclick = async ()=>{
     if (!lastBlob) return;
-    $("#resultR").textContent = "Analyse en cours…";
+    $("#resultR").textContent = "Analyse…";
     $("#coachR").textContent = "";
     lastScoreResult = null;
 
-    const referenceText = ta.value;
     const res = await scoreWithProvider({
       audioBlob: lastBlob,
-      referenceText,
+      referenceText: ta.value,
       mode: "reading",
       soundId: sound.id
     });
@@ -984,22 +918,20 @@ function renderModeReading(sound){
     }
 
     const pct = scoreToPct(res.overallScore);
-    if (pct !== null){
-      updateScore(sound.id, pct);
-    }
+    if (pct !== null) updateScore(sound.id, pct);
 
     $("#resultR").innerHTML = `
       <div class="badge">Provider <strong>${escapeHtml(res.provider)}</strong></div>
       <div class="badge">Score <strong>${pct===null ? "—" : pct+"%"}</strong></div>
       <details style="margin-top:10px;">
-        <summary class="small">Voir la réponse brute</summary>
+        <summary class="small">Brut</summary>
         <pre style="overflow:auto; font-family:var(--mono); font-size:12px; white-space:pre-wrap;">${escapeHtml(JSON.stringify(res.raw || res, null, 2))}</pre>
       </details>
     `;
     $("#btnCoachR").disabled = false;
     lastScoreResult = res;
 
-    showToast(pct===null ? "Analyse terminée" : `Score: ${pct}%`);
+    showToast(pct===null ? "OK" : `Score ${pct}%`);
     setTimeout(()=> renderSound(sound.id), 400);
   };
 
@@ -1017,16 +949,15 @@ function renderModeReading(sound){
 function renderModeExtras(sound){
   const modeCard = $("#modeCard");
   modeCard.innerHTML = `
-    <div class="h2">Mode: Exercices</div>
-    <p class="p">Paires minimales + liste de prompts rapides. (Tu peux les utiliser en Pratique.)</p>
+    <div class="h2">Exercices</div>
 
-    <div class="h2">Paires minimales</div>
+    <div class="h2" style="margin-top:12px;">Paires minimales</div>
     <div id="pairs"></div>
 
     <div class="hr"></div>
 
-    <div class="h2">Prompts rapides</div>
-    <p class="p">${(sound.practicePrompts||[]).map(x=>`<span class="badge"><strong>${escapeHtml(x)}</strong></span>`).join(" ")}</p>
+    <div class="h2">Prompts</div>
+    <div class="p">${(sound.practicePrompts||[]).map(x=>`<span class="badge"><strong>${escapeHtml(x)}</strong></span>`).join(" ")}</div>
   `;
 
   const pairs = $("#pairs");
@@ -1036,7 +967,7 @@ function renderModeExtras(sound){
     div.innerHTML = `
       <div class="label">${escapeHtml(p.a)} <span class="kbd">vs</span> ${escapeHtml(p.b)}</div>
       <div class="meta">${escapeHtml(p.note || "")}</div>
-      <div class="btnrow">
+      <div class="btnrow" style="justify-content:center;">
         <button class="btn" data-say="${escapeHtml(p.a)}">Écouter A</button>
         <button class="btn" data-say="${escapeHtml(p.b)}">Écouter B</button>
       </div>
@@ -1049,8 +980,7 @@ function renderModeExtras(sound){
 }
 
 function renderTest(){
-  setSubtitle("Test rapide");
-  const settings = loadSettings();
+  setSubtitle("Test");
 
   const TEST_TEXT =
 `Un bon pain bien chaud, un enfant content, et mon oncle heureux.
@@ -1058,18 +988,15 @@ Peu à peu, ils parlent et ils chantent sans peur, dans un grand vent.`.trim();
 
   view.innerHTML = `
     <div class="card">
-      <div class="h1">Test rapide (lecture)</div>
-      <p class="p">
-        Lis ce texte à voix haute. Si un provider de scoring (via proxy) est configuré, l’app essaie de te suggérer quels sons travailler en priorité.
-      </p>
+      <div class="h1">Test rapide</div>
 
       <div class="field">
-        <label>Texte du test</label>
+        <label>Texte</label>
         <textarea id="testText">${escapeHtml(TEST_TEXT)}</textarea>
       </div>
 
       <div class="btnrow">
-        <button class="btn" id="btnSpeakTest">Écouter (TTS)</button>
+        <button class="btn" id="btnSpeakTest">Écouter</button>
         <button class="btn primary" id="btnRecT">🎙️ Enregistrer</button>
         <button class="btn" id="btnStopT" disabled>Stop</button>
       </div>
@@ -1079,19 +1006,13 @@ Peu à peu, ils parlent et ils chantent sans peur, dans un grand vent.`.trim();
       <div class="hr"></div>
 
       <div class="btnrow">
-        <button class="btn primary" id="btnScoreT" disabled>Analyser / Score</button>
+        <button class="btn primary" id="btnScoreT" disabled>Score</button>
         <button class="btn" id="btnCoachT" disabled>Feedback IA</button>
       </div>
 
       <div id="resultT" class="small" style="margin-top:10px;"></div>
       <div id="reco" style="margin-top:10px;"></div>
       <div id="coachT" class="p" style="white-space:pre-wrap; margin-top:10px;"></div>
-
-      <div class="hr"></div>
-      <p class="small">
-        Provider actuel: <span class="kbd">${escapeHtml(settings.provider)}</span> •
-        Proxy URL: <span class="kbd">${escapeHtml(settings.proxyUrl || "—")}</span>
-      </p>
     </div>
   `;
 
@@ -1129,12 +1050,12 @@ Peu à peu, ils parlent et ils chantent sans peur, dans un grand vent.`.trim();
     $("#btnRecT").disabled = false;
     $("#btnScoreT").disabled = false;
     $("#btnCoachT").disabled = true;
-    $("#resultT").textContent = "Audio prêt. Lance “Analyser / Score”.";
+    $("#resultT").textContent = "Audio prêt.";
   };
 
   $("#btnScoreT").onclick = async ()=>{
     if (!lastBlob) return;
-    $("#resultT").textContent = "Analyse en cours…";
+    $("#resultT").textContent = "Analyse…";
     $("#reco").innerHTML = "";
     $("#coachT").textContent = "";
     lastScoreResult = null;
@@ -1157,48 +1078,37 @@ Peu à peu, ils parlent et ils chantent sans peur, dans un grand vent.`.trim();
     $("#resultT").innerHTML = `
       <div class="badge">Provider <strong>${escapeHtml(res.provider)}</strong></div>
       <div class="badge">Score global <strong>${pct===null ? "—" : pct+"%"}</strong></div>
-      <details style="margin-top:10px;">
-        <summary class="small">Voir la réponse brute</summary>
-        <pre style="overflow:auto; font-family:var(--mono); font-size:12px; white-space:pre-wrap;">${escapeHtml(JSON.stringify(res.raw || res, null, 2))}</pre>
-      </details>
     `;
 
-    // Suggestions (heuristique simple):
-    // - si le proxy renvoie un tableau "weakPhonemes" ou similaire, on mappe vers nos sons
     const suggested = suggestSoundsFromDetails(res.details);
     $("#reco").innerHTML = suggested.length ? `
-      <div class="h2">Sons suggérés</div>
+      <div class="h2">À travailler</div>
       <div class="grid">
         ${suggested.map(s=>`
-          <div class="item" data-sid="${s.id}">
+          <div class="item" data-sid="${escapeHtml(s.id)}">
             <div class="label">${escapeHtml(s.title)}</div>
-            <div class="meta">${escapeHtml(s.ipa)} • clique pour pratiquer</div>
+            <div class="meta">${escapeHtml(s.ipa)}</div>
           </div>
         `).join("")}
       </div>
-    ` : `
-      <p class="small">
-        Suggestions indisponibles (le provider n’a pas renvoyé de détails phonèmes). Tu peux quand même aller à “Scores” et choisir un son.
-      </p>
-    `;
+    ` : `<p class="small">Pas de suggestions (détails phonèmes manquants). Va dans “Scores”.</p>`;
+
     $$("[data-sid]").forEach(el=>{
-      el.onclick = ()=> navigate(`#/sound/${el.getAttribute("data-sid")}`);
+      el.onclick = ()=> navigate(`#/sound/${encodeURIComponent(el.getAttribute("data-sid"))}`);
     });
 
     $("#btnCoachT").disabled = false;
     lastScoreResult = res;
 
-    showToast(pct===null ? "Analyse terminée" : `Score global: ${pct}%`);
+    showToast(pct===null ? "OK" : `Score ${pct}%`);
   };
 
   $("#btnCoachT").onclick = async ()=>{
     $("#coachT").textContent = "Coach IA…";
-    const pseudoSound = { // pour le prompt coach
+    const pseudoSound = {
       title:"Test global",
       ipa:"(lecture)",
       articulatory:"Lecture fluide, liaisons naturelles, voyelles nettes, nasalité stable.",
-      spellings:[],
-      readingText: ta.value
     };
     const r = await generateCoachFeedback({
       sound: pseudoSound,
@@ -1210,23 +1120,18 @@ Peu à peu, ils parlent et ils chantent sans peur, dans un grand vent.`.trim();
 }
 
 function suggestSoundsFromDetails(details){
-  // Heuristique très souple: ton proxy peut renvoyer:
-  // details = { weakPhonemes: ["ɑ̃","ɔ̃","ɛ̃","ø","œ"], scoresByPhoneme: { "ɑ̃":42, ... } }
-  // ou n'importe quel format: on essaye de détecter des strings IPA
   if (!details) return [];
   let weak = [];
 
   if (Array.isArray(details.weakPhonemes)) weak = details.weakPhonemes.slice(0,6);
   else if (details.scoresByPhoneme && typeof details.scoresByPhoneme === "object"){
-    const arr = Object.entries(details.scoresByPhoneme)
+    weak = Object.entries(details.scoresByPhoneme)
       .map(([k,v])=>({k, v:Number(v)}))
       .filter(x=>Number.isFinite(x.v))
       .sort((a,b)=>a.v-b.v)
       .slice(0,6)
       .map(x=>x.k);
-    weak = arr;
   } else {
-    // fallback: cherche des tokens IPA simples dans JSON string
     const s = JSON.stringify(details);
     const candidates = ["ɑ̃","ɔ̃","ɛ̃","œ̃","ø","œ"];
     weak = candidates.filter(c=> s.includes(c));
@@ -1252,38 +1157,36 @@ function renderSettings(){
       <div class="col">
         <div class="card">
           <div class="h1">Paramètres</div>
-          <p class="p">Mode sombre par défaut. Clés stockées localement (⚠️ côté client).</p>
 
           <div class="h2">Apparence</div>
           <div class="field">
             <label>Thème</label>
             <select id="themeSel">
-              <option value="dark">Sombre (défaut)</option>
+              <option value="dark">Sombre</option>
               <option value="light">Clair</option>
             </select>
           </div>
 
-          <div class="h2">TTS (voix navigateur)</div>
+          <div class="h2">TTS</div>
           <div class="field">
             <label>Voix française</label>
             <select id="voiceSel"></select>
           </div>
 
           <div class="hr"></div>
-          <div class="h2">Scoring (recommandé via proxy)</div>
 
+          <div class="h2">Scoring</div>
           <div class="field">
             <label>Provider</label>
             <select id="providerSel">
-              <option value="none">none (sans score)</option>
-              <option value="proxy">proxy (recommandé)</option>
+              <option value="none">none</option>
+              <option value="proxy">proxy</option>
             </select>
           </div>
 
           <div class="field">
-            <label>Proxy URL (ex: https://ton-worker.workers.dev)</label>
+            <label>Proxy URL (recommandé)</label>
             <input id="proxyUrl" placeholder="https://..." value="${escapeHtml(s.proxyUrl)}" />
-            <div class="small">Le proxy doit exposer <span class="kbd">POST /score</span>.</div>
           </div>
 
           <div class="btnrow">
@@ -1294,11 +1197,7 @@ function renderSettings(){
 
       <div class="col">
         <div class="card">
-          <div class="h2">Clés API (optionnel)</div>
-          <p class="small">
-            ⚠️ Sur GitHub Pages, tout est public côté front-end. Pour un usage perso ça peut aller,
-            mais le mieux est de mettre les clés uniquement dans ton backend/proxy.
-          </p>
+          <div class="h2">Clés (optionnel)</div>
 
           <div class="field">
             <label>OpenRouter API Key</label>
@@ -1307,7 +1206,6 @@ function renderSettings(){
           <div class="field">
             <label>OpenRouter model</label>
             <input id="openrouterModel" placeholder="${escapeHtml(DEFAULTS.openrouterModel)}" value="${escapeHtml(s.openrouterModel)}" />
-            <div class="small">Ex: <span class="kbd">openai/gpt-4o-mini</span> (ou autre dispo sur OpenRouter)</div>
           </div>
 
           <div class="hr"></div>
@@ -1317,7 +1215,7 @@ function renderSettings(){
             <input id="azureKey" placeholder="Azure key..." value="${escapeHtml(s.azureKey)}" />
           </div>
           <div class="field">
-            <label>Azure Region (ex: eastus)</label>
+            <label>Azure Region</label>
             <input id="azureRegion" placeholder="eastus" value="${escapeHtml(s.azureRegion)}" />
           </div>
 
@@ -1329,36 +1227,34 @@ function renderSettings(){
           </div>
 
           <div class="btnrow">
-            <button class="btn danger" id="clearKeys">Effacer les clés</button>
+            <button class="btn danger" id="clearKeys">Effacer</button>
           </div>
+
+          <p class="small">⚠️ Sur GitHub Pages, tout est côté client. Pour partager, passe par un proxy.</p>
         </div>
       </div>
     </div>
   `;
 
-  // theme
   $("#themeSel").value = s.theme || "dark";
 
-  // voices
   const voiceSel = $("#voiceSel");
   const addOpt = (value, label)=>{
     const o = document.createElement("option");
     o.value = value; o.textContent = label;
     voiceSel.appendChild(o);
   };
-  addOpt("auto", "Auto (fr-CA → fr-FR)");
+
   const fillVoices = ()=>{
     const voices = listFrenchVoices();
-    voices.forEach(v=>{
-      addOpt(v.voiceURI, `${v.name} • ${v.lang}`);
-    });
+    addOpt("auto", "Auto (fr-CA → fr-FR)");
+    voices.forEach(v=> addOpt(v.voiceURI, `${v.name} • ${v.lang}`));
     voiceSel.value = s.ttsVoice || "auto";
   };
-  // voices may load async
   fillVoices();
+
   speechSynthesis.onvoiceschanged = ()=> {
     voiceSel.innerHTML = "";
-    addOpt("auto", "Auto (fr-CA → fr-FR)");
     fillVoices();
   };
 
@@ -1383,7 +1279,7 @@ function renderSettings(){
     document.documentElement.setAttribute("data-theme", next.theme);
     btnTheme.textContent = next.theme === "dark" ? "🌙" : "☀️";
 
-    showToast("Paramètres enregistrés");
+    showToast("Enregistré");
   };
 
   $("#clearKeys").onclick = ()=>{
@@ -1394,13 +1290,9 @@ function renderSettings(){
     next.azureRegion = "";
     next.speechaceKey = "";
     saveSettings(next);
-    showToast("Clés effacées");
+    showToast("OK");
     renderSettings();
   };
-}
-
-function escapeHtml(s){
-  return String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
 }
 
 /* -----------------------------
