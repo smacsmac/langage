@@ -1,4 +1,3 @@
-// Ultra simple offline cache (app shell)
 const CACHE = "phonocoach-v1";
 const ASSETS = [
   "./",
@@ -33,7 +32,6 @@ self.addEventListener("fetch", (e)=>{
       const fresh = await fetch(req);
       return fresh;
     }catch{
-      // fallback minimal
       return cached || new Response("Offline", {status:200});
     }
   })());
