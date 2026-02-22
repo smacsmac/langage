@@ -1,0 +1,15 @@
+{
+  "name": "PhonoCoach FR",
+  "short_name": "PhonoCoach",
+  "start_url": "./#/",
+  "display": "standalone",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0f14'/%3E%3Cpath fill='%236ee7ff' d='M32 8c7 0 12 5 12 12v12c0 7-5 12-12 12S20 39 20 32V20c0-7 5-12 12-12zm0 38c9 0 16-7 16-16h-4c0 7-5 12-12 12s-12-5-12-12h-4c0 9 7 16 16 16z'/%3E%3C/svg%3E",
+      "sizes": "256x256",
+      "type": "image/svg+xml"
+    }
+  ]
+}
